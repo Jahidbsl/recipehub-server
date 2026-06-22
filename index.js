@@ -52,6 +52,218 @@ async function startServer() {
     const reportsCollection = db.collection("reports");
     const purchasesCollection = db.collection("purchases");
 
+
+
+
+
+
+// 📋 ১. সব রিপোর্ট একসাথে দেখার API (Admin Panel-এর জন্য)
+app.get("/api/admin/reports", async (req, res) => {
+  try {
+    // এখানে আমরা রিপোর্টগুলোর সাথে রেসিপির নাম/ডিলেট অপশনের জন্য 'recipes' কালেকশনের সাথে lookup (join) করছি
+    const reports = await reportsCollection.aggregate([
+      {
+        $lookup: {
+          from: "recipes", // আপনার রেসিপি কালেকশনের নাম 'recipes' হলে এটি রাখুন
+          localField: "recipeId",
+          foreignField: "_id", // রেসিপি আইডি যদি স্ট্রিং হয় তবে "_id", অবজেক্ট আইডি হলে কনভার্ট করা লাগতে পারে
+          as: "recipeDetails"
+        }
+      },
+      { $unwind: { path: "$recipeDetails", preserveNullAndEmptyArrays: true } }
+    ]).toArray();
+
+    res.status(200).json(reports);
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// 🗑️ ২. Dismiss Report API (শুধু রিপোর্ট ডিলিট হবে, রেসিপি থাকবে)
+app.delete("/api/admin/reports/:reportId/dismiss", async (req, res) => {
+  try {
+    const { reportId } = req.params;
+    
+    const query = ObjectId.isValid(reportId) ? { _id: new ObjectId(reportId) } : { _id: reportId };
+    const result = await reportsCollection.deleteOne(query);
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: "Report not found" });
+    }
+
+    res.status(200).json({ success: true, message: "Report dismissed successfully!" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// 🚫 ৩. Delete Recipe & Reports API (রেসিপি এবং ওই রেসিপির সব রিপোর্ট একসাথে ডিলিট হবে)
+app.delete("/api/admin/recipes/:recipeId", async (req, res) => {
+  try {
+    const { recipeId } = req.params;
+
+    // ক. মূল রেসিপি ডিলিট করুন
+    const recipeQuery = ObjectId.isValid(recipeId) ? { _id: new ObjectId(recipeId) } : { _id: recipeId };
+    await db.collection("recipes").deleteOne(recipeQuery);
+
+    // খ. ওই রেসিপির যতগুলো রিপোর্ট কালেকশনে আছে, সব মুছে দিন
+    await reportsCollection.deleteMany({ recipeId: recipeId });
+
+    res.status(200).json({ success: true, message: "Recipe and associated reports deleted!" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+    // user api API
+app.get("/api/users", async (req, res) => {
+  try {
+    const users = await db.collection("user").find({}).toArray(); // 👈 এখানে "user" দিন
+    res.status(200).json(users);
+  } catch (error) {
+    console.error("Fetch Users Error:", error);
+    res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
+});
+
+// block/unblock api
+app.patch("/api/users/:id/block", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isBlocked } = req.body;
+
+    // ১. ইউজার আইডি ফরম্যাট চেক (String অথবা ObjectId দুইটাই হ্যান্ডেল করবে)
+    let userQuery = { _id: id };
+    if (ObjectId.isValid(id)) {
+      userQuery = { 
+        $or: [
+          { _id: id }, 
+          { _id: new ObjectId(id) }
+        ] 
+      };
+    }
+
+    // ২. 'user' কালেকশনে ইউজারের ব্লক স্ট্যাটাস আপডেট করুন
+    const userResult = await db.collection("user").updateOne(
+      userQuery, 
+      { $set: { isBlocked: Boolean(isBlocked) } }
+    );
+
+    if (userResult.matchedCount === 0) {
+      return res.status(404).json({ success: false, message: "User not found!" });
+    }
+
+    // 🛑 ৩. ইউজারকে ব্লক করা হলে, সরাসরি Better Auth-এর 'session' কালেকশন থেকে তার সেশন ডিলিট করুন
+    if (isBlocked === true || isBlocked === "true") {
+      const sessionResult = await db.collection("session").deleteMany({
+        userId: id // Better Auth ডাটাবেজে userId-টিকে স্ট্রিং আকারে রাখে
+      });
+      
+      console.log(`Force Logout Successful! Deleted ${sessionResult.deletedCount} active sessions.`);
+    }
+
+    res.status(200).json({ 
+      success: true, 
+      message: isBlocked ? "User blocked & kicked out successfully! 🚫" : "User unblocked successfully! ✅" 
+    });
+
+  } catch (error) {
+    console.error("Express Block Error:", error);
+    res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
+});
+
+    // admin api for recipes manage
+
+app.patch("/api/recipes/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isFeatured } = req.body;
+
+    console.log("Received ID:", id); // ডিবাগিং এর জন্য লগ
+    console.log("Received Status:", isFeatured); // ডিবাগিং এর জন্য লগ
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid ID Format" });
+    }
+
+    const result = await db.collection("recipes").updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { isFeatured: Boolean(isFeatured) } }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ success: false, message: "Recipe not found!" });
+    }
+
+    res.status(200).json({ success: true, message: "Updated in DB successfully!" });
+  } catch (error) {
+    console.error("PATCH Error:", error);
+    res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
+});
+// upore sob admin api
+    // user favorites API
+
+    app.get("/api/users/:userId/favorites", async (req, res) => {
+      try {
+        const { userId } = req.params;
+
+        const userFavorites = await favoritesCollection
+          .find({ userId })
+          .toArray();
+
+        if (!userFavorites.length) {
+          return res.send([]);
+        }
+
+        const recipeIds = userFavorites.map(
+          (fav) => new ObjectId(fav.recipeId),
+        );
+
+        const favoriteRecipes = await recipesCollection
+          .find({
+            _id: { $in: recipeIds },
+          })
+          .toArray();
+
+        res.send(favoriteRecipes);
+      } catch (error) {
+        console.error("Favorites Error:", error);
+        res.status(500).send({ error: error.message });
+      }
+    });
+
+    // user puschases API
+
+    app.get("/api/users/:userId/purchases", async (req, res) => {
+      try {
+        const { userId } = req.params;
+
+        const userPurchases = await purchasesCollection
+          .find({ userId })
+          .toArray();
+
+        if (!userPurchases.length) {
+          return res.send([]);
+        }
+
+        const recipeIds = userPurchases.map(
+          (purchase) => new ObjectId(purchase.recipeId),
+        );
+
+        const purchasedRecipes = await recipesCollection
+          .find({
+            _id: { $in: recipeIds },
+          })
+          .toArray();
+
+        res.send(purchasedRecipes);
+      } catch (error) {
+        console.error("Purchases Error:", error);
+        res.status(500).send({ error: error.message });
+      }
+    });
     // Like toggle
     app.post("/api/recipes/:id/like", async (req, res) => {
       const { userId } = req.body;
@@ -130,24 +342,30 @@ async function startServer() {
       });
     });
 
+    // Purchases Collection Route
+    app.post("/api/purchases", async (req, res) => {
+      try {
+        const { userId, recipeId, amount, email } = req.body;
 
-    // purchases
-app.post("/api/recipes/:recipeId/purchase", async (req, res) => {
-  const { recipeId } = req.params;
-  const { userId, amount, email } = req.body;
+        // মঙ্গোডিবি কালেকশনে সফলভাবে ইনসার্ট করা
+        const result = await purchasesCollection.insertOne({
+          userId: userId || null,
+          recipeId: recipeId || null,
+          amount: amount ? Number(amount) : 4.99,
+          email: email || null,
+          createdAt: new Date(),
+        });
 
-  await purchasesCollection.insertOne({
-    userId,
-    recipeId,
-    amount,
-    email,
-    createdAt: new Date(),
-  });
-
-  res.send({
-    success: true,
-  });
-});
+        res.send({
+          success: true,
+          message: "Purchase logged successfully",
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        console.error("Database Error:", error);
+        res.status(500).send({ success: false, error: error.message });
+      }
+    });
 
     // ========================================================================
     // subcriptions ROUTES
@@ -197,34 +415,45 @@ app.post("/api/recipes/:recipeId/purchase", async (req, res) => {
     // ========================================================================
 
     app.get("/api/plans", async (req, res) => {
-      const query = {};
+      try {
+        const { plan_id } = req.query;
 
-      if (req.query.plan_id) {
-        query.id = req.query.plan_id;
+        const targetId = plan_id || "free";
+
+        const plan = await planCollection.findOne({ id: targetId });
+
+        if (!plan) {
+          return res.status(404).send({
+            id: "free",
+            name: "Free Plan",
+            maxAddPerUser: 2,
+            billingCycle: "none",
+          });
+        }
+
+        res.send(plan);
+      } catch (error) {
+        console.error("Error fetching plan:", error);
+        res.status(500).send({ message: "Internal server error" });
       }
-
-      const plan = await planCollection.findOne(query);
-
-      res.send(plan);
     });
 
     // ========================================================================
     // RECIPE ROUTES
     // ========================================================================
-app.get("/api/browse-recipes/:id", async (req, res) => {
-  try {
-    console.log("ID:", req.params.id); // ← কী আসছে দেখো
-    const recipe = await recipesCollection.findOne({
-      _id: new ObjectId(req.params.id),
+    app.get("/api/browse-recipes/:id", async (req, res) => {
+      try {
+        console.log("ID:", req.params.id); // ← কী আসছে দেখো
+        const recipe = await recipesCollection.findOne({
+          _id: new ObjectId(req.params.id),
+        });
+        if (!recipe) return res.status(404).send({ error: "Not found" });
+        res.send(recipe);
+      } catch (err) {
+        console.error("Recipe fetch error:", err.message);
+        res.status(500).send({ error: err.message });
+      }
     });
-    if (!recipe) return res.status(404).send({ error: "Not found" });
-    res.send(recipe);
-  } catch (err) {
-    console.error("Recipe fetch error:", err.message);
-    res.status(500).send({ error: err.message });
-  }
-});
-
 
     app.get("/api/recipes", async (req, res) => {
       const query = {};
