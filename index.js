@@ -97,16 +97,16 @@ app.delete("/api/admin/reports/:reportId/dismiss", async (req, res) => {
   }
 });
 
-// 🚫 ৩. Delete Recipe & Reports API (রেসিপি এবং ওই রেসিপির সব রিপোর্ট একসাথে ডিলিট হবে)
+// 🚫 ৩. Delete Recipe & Reports API 
 app.delete("/api/admin/recipes/:recipeId", async (req, res) => {
   try {
     const { recipeId } = req.params;
 
-    // ক. মূল রেসিপি ডিলিট করুন
+   
     const recipeQuery = ObjectId.isValid(recipeId) ? { _id: new ObjectId(recipeId) } : { _id: recipeId };
     await db.collection("recipes").deleteOne(recipeQuery);
 
-    // খ. ওই রেসিপির যতগুলো রিপোর্ট কালেকশনে আছে, সব মুছে দিন
+  
     await reportsCollection.deleteMany({ recipeId: recipeId });
 
     res.status(200).json({ success: true, message: "Recipe and associated reports deleted!" });
@@ -441,6 +441,7 @@ app.patch("/api/recipes/:id", async (req, res) => {
     // ========================================================================
     // RECIPE ROUTES
     // ========================================================================
+
     app.get("/api/browse-recipes/:id", async (req, res) => {
       try {
         console.log("ID:", req.params.id); // ← কী আসছে দেখো
@@ -477,7 +478,7 @@ app.patch("/api/recipes/:id", async (req, res) => {
       };
       const result = await recipesCollection.insertOne(newRecipe);
 
-      // ✅ এটা add করুন
+     
       if (result.insertedId) {
         res
           .status(201)
@@ -488,6 +489,70 @@ app.patch("/api/recipes/:id", async (req, res) => {
           .json({ success: false, message: "Failed to add recipe" });
       }
     });
+
+    // update
+
+    app.patch("/api/recipes/update/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const updatedData = req.body;
+
+    const result = await recipesCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          ...updatedData,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({
+        success: false,
+        message: "Recipe not found",
+      });
+    }
+
+    res.send({
+      success: true,
+      message: "Recipe updated successfully",
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (error) {
+    res.status(500).send({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+// delate
+app.delete("/api/recipes/delete/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+
+    const result = await recipesCollection.deleteOne({
+      _id: new ObjectId(id),
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).send({
+        success: false,
+        message: "Recipe not found",
+      });
+    }
+
+    res.send({
+      success: true,
+      message: "Recipe deleted successfully",
+    });
+  } catch (error) {
+    res.status(500).send({
+      success: false,
+      error: error.message,
+    });
+  }
+});
 
     // ========================================================================
     // HEALTH CHECK
