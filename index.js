@@ -188,13 +188,40 @@ app.get(
   verifyAdmin,
   async (req, res) => {
     try {
-      // গ্লোবাল ভ্যারিয়েবল ব্যবহার না করে সরাসরি রিকোয়েস্টের সময় কালেকশন কল করুন
+      // ১. প্রথমে সব রিপোর্ট সরাসরি ডাটাবেজ থেকে তুলে আনা হচ্ছে
       const reports = await db.collection("reports").find({}).toArray();
-      
-      console.log("Realtime Data Check:", reports);
-      res.status(200).json(reports);
+
+      if (!reports || reports.length === 0) {
+        return res.status(200).json([]);
+      }
+
+      // ২. জাভাস্ক্রিপ্ট লেভেলে লুপ চালিয়ে প্রতিটা রিপোর্টের জন্য রেসিপি ডাটা খোঁজা হচ্ছে
+      const reportsWithDetails = await Promise.all(
+        reports.map(async (report) => {
+          let recipeDetails = null;
+
+          // স্ট্রিং আইডি এবং অবজেক্ট আইডি উভয় ফরম্যাটেই চেক করা হচ্ছে যেন কোনোভাবে মিস না হয়
+          try {
+            recipeDetails = await db.collection("recipes").findOne({
+              $or: [
+                { _id: report.recipeId },
+                { _id: ObjectId.isValid(report.recipeId) ? new ObjectId(report.recipeId) : null }
+              ]
+            });
+          } catch (err) {
+            recipeDetails = null;
+          }
+
+          return {
+            ...report,
+            recipeDetails: recipeDetails || { name: "Unknown or Deleted Recipe" }
+          };
+        })
+      );
+
+      res.status(200).json(reportsWithDetails);
     } catch (error) {
-      console.error("Route level error:", error);
+      console.error("Fetch Reports Error:", error);
       res.status(500).json({ success: false, message: "Server Error" });
     }
   },
