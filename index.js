@@ -16,7 +16,7 @@ app.use(
     origin: "https://recipehub-roan-sigma.vercel.app",
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization","expires"],
   }),
 );
 
