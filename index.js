@@ -1,11 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-app.use(cors({
-  origin: 'https://recipehub-roan-sigma.vercel.app', 
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+
 require("dotenv").config();
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
@@ -16,12 +11,12 @@ const port = process.env.PORT || 5000;
 // =======================
 // Middleware
 // =======================
-app.use(
-  cors({
-    origin: ["http://localhost:3000"],
-    credentials: true,
-  }),
-);
+app.use(cors({
+  origin: 'https://recipehub-roan-sigma.vercel.app', 
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
