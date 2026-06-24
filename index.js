@@ -181,71 +181,20 @@ async function startServer() {
       },
     );
     // . সব রিপোর্ট একসাথে দেখার API (Admin Panel-এর জন্য)
-  app.get(
+app.get(
   "/api/admin/reports",
   logger,
   verifyToken,
   verifyAdmin,
   async (req, res) => {
     try {
-      const reports = await reportsCollection
-        .aggregate([
-          {
-            $addFields: {
-              // String recipeId কে ObjectId তে কনভার্ট করা হচ্ছে
-              recipeObjId: {
-                $convert: {
-                  input: "$recipeId",
-                  to: "objectId",
-                  onError: null,
-                  onNull: null
-                }
-              },
-              // String userId কে ObjectId তে কনভার্ট করা হচ্ছে
-              userObjId: {
-                $convert: {
-                  input: "$userId",
-                  to: "objectId",
-                  onError: null,
-                  onNull: null
-                }
-              }
-            }
-          },
-          {
-            $lookup: {
-              from: "recipes",
-              localField: "recipeObjId",
-              foreignField: "_id",
-              as: "recipeDetails"
-            }
-          },
-          {
-            $unwind: {
-              path: "$recipeDetails",
-              preserveNullAndEmptyArrays: true
-            }
-          },
-          {
-            $lookup: {
-              from: "user", // Better Auth এর ডিফল্ট কালেকশন নাম ইউজার হলে 'user' রাখুন
-              localField: "userObjId",
-              foreignField: "_id",
-              as: "userDetails"
-            }
-          },
-          {
-            $unwind: {
-              path: "$userDetails",
-              preserveNullAndEmptyArrays: true
-            }
-          }
-        ])
-        .toArray();
-
+      // কোনো এগ্রিগেশন বা জয়েন ছাড়া সরাসরি কালেকশনের সব ডাটা তুলে আনা হচ্ছে
+      const reports = await db.collection("reports").find({}).toArray();
+      
+      console.log("Raw Reports from DB:", reports); // আপনার ব্যাকএন্ড কনসোলে ডাটা প্রিন্ট হবে
       res.status(200).json(reports);
     } catch (error) {
-      console.error("Fetch Reports Error:", error);
+      console.error("Fetch Raw Reports Error:", error);
       res.status(500).json({ success: false, message: "Server Error" });
     }
   },
