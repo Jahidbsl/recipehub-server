@@ -181,62 +181,75 @@ async function startServer() {
       },
     );
     // . সব রিপোর্ট একসাথে দেখার API (Admin Panel-এর জন্য)
-    app.get(
-      "/api/admin/reports",
-      logger,
-      verifyToken,
-      verifyAdmin,
-      async (req, res) => {
-        try {
-          const reports = await reportsCollection
-            .aggregate([
-              {
-                $addFields: {
-                  convertedRecipeId: {
-                    $convert: {
-                      input: "$recipeId",
-                      to: "objectId",
-                      onError: "$recipeId",
-                      onNull: "$recipeId",
-                    },
-                  },
-                },
+  app.get(
+  "/api/admin/reports",
+  logger,
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
+    try {
+      const reports = await reportsCollection
+        .aggregate([
+          {
+            $addFields: {
+              // String recipeId কে ObjectId তে কনভার্ট করা হচ্ছে
+              recipeObjId: {
+                $convert: {
+                  input: "$recipeId",
+                  to: "objectId",
+                  onError: null,
+                  onNull: null
+                }
               },
-              {
-                $lookup: {
-                  from: "recipes",
-                  let: { rId: "$recipeId", convId: "$convertedRecipeId" },
-                  pipeline: [
-                    {
-                      $match: {
-                        $expr: {
-                          $or: [
-                            { $eq: ["$_id", "$$rId"] },
-                            { $eq: ["$_id", "$$convId"] },
-                          ],
-                        },
-                      },
-                    },
-                  ],
-                  as: "recipeDetails",
-                },
-              },
-              {
-                $unwind: {
-                  path: "$recipeDetails",
-                  preserveNullAndEmptyArrays: true,
-                },
-              },
-            ])
-            .toArray();
+              // String userId কে ObjectId তে কনভার্ট করা হচ্ছে
+              userObjId: {
+                $convert: {
+                  input: "$userId",
+                  to: "objectId",
+                  onError: null,
+                  onNull: null
+                }
+              }
+            }
+          },
+          {
+            $lookup: {
+              from: "recipes",
+              localField: "recipeObjId",
+              foreignField: "_id",
+              as: "recipeDetails"
+            }
+          },
+          {
+            $unwind: {
+              path: "$recipeDetails",
+              preserveNullAndEmptyArrays: true
+            }
+          },
+          {
+            $lookup: {
+              from: "user", // Better Auth এর ডিফল্ট কালেকশন নাম ইউজার হলে 'user' রাখুন
+              localField: "userObjId",
+              foreignField: "_id",
+              as: "userDetails"
+            }
+          },
+          {
+            $unwind: {
+              path: "$userDetails",
+              preserveNullAndEmptyArrays: true
+            }
+          }
+        ])
+        .toArray();
 
-          res.status(200).json(reports);
-        } catch (error) {
-          console.error("Fetch Reports Error:", error);
-          res.status(500).json({ success: false, message: "Server Error" });
-        }
-      },
-    );
+      res.status(200).json(reports);
+    } catch (error) {
+      console.error("Fetch Reports Error:", error);
+      res.status(500).json({ success: false, message: "Server Error" });
+    }
+  },
+);
 
     // . Dismiss Report API (শুধু রিপোর্ট ডিলিট হবে, রেসিপি থাকবে)
     app.delete(
