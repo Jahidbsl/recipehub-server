@@ -52,222 +52,368 @@ async function startServer() {
     const reportsCollection = db.collection("reports");
     const purchasesCollection = db.collection("purchases");
 
+    const sessionCollection = db.collection("session");
 
+    // varification
+    const logger = (req, res, next) => {
+      console.log("Logger middleware Logged", req.params);
+      next();
+    };
+    const verifyToken = async (req, res, next) => {
+      try {
+        const authHeader = req.headers?.authorization;
 
+        if (!authHeader) {
+          return res.status(401).send({
+            message: "Unauthorized access",
+          });
+        }
 
+        const token = authHeader.split(" ")[1];
 
+        if (!token) {
+          return res.status(401).send({
+            message: "Unauthorized access",
+          });
+        }
 
-// 📋 ১. সব রিপোর্ট একসাথে দেখার API (Admin Panel-এর জন্য)
-app.get("/api/admin/reports", async (req, res) => {
-  try {
-    // এখানে আমরা রিপোর্টগুলোর সাথে রেসিপির নাম/ডিলেট অপশনের জন্য 'recipes' কালেকশনের সাথে lookup (join) করছি
-    const reports = await reportsCollection.aggregate([
-      {
-        $lookup: {
-          from: "recipes", // আপনার রেসিপি কালেকশনের নাম 'recipes' হলে এটি রাখুন
-          localField: "recipeId",
-          foreignField: "_id", // রেসিপি আইডি যদি স্ট্রিং হয় তবে "_id", অবজেক্ট আইডি হলে কনভার্ট করা লাগতে পারে
-          as: "recipeDetails"
+        const session = await sessionCollection.findOne({ token });
+
+        if (!session) {
+          return res.status(401).send({
+            message: "Invalid token",
+          });
+        }
+
+        const user = await usersCollection.findOne({
+          _id: new ObjectId(session.userId),
+        });
+
+        if (!user) {
+          return res.status(401).send({
+            message: "User not found",
+          });
+        }
+
+        req.user = user;
+
+        next();
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({
+          message: "Internal Server Error",
+        });
+      }
+    };
+    const verifyAdmin = async (req, res, next) => {
+      if (req.user?.role !== "admin") {
+        return res.status(403).send({ Message: "forbidden access" });
+      }
+      next();
+    };
+
+    // . সব রিপোর্ট একসাথে দেখার API (Admin Panel-এর জন্য)
+    app.get(
+      "/api/admin/reports",
+      logger,
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          // এখানে আমরা রিপোর্টগুলোর সাথে রেসিপির নাম/ডিলেট অপশনের জন্য 'recipes' কালেকশনের সাথে lookup (join) করছি
+          const reports = await reportsCollection
+            .aggregate([
+              {
+                $lookup: {
+                  from: "recipes", // আপনার রেসিপি কালেকশনের নাম 'recipes' হলে এটি রাখুন
+                  localField: "recipeId",
+                  foreignField: "_id", // রেসিপি আইডি যদি স্ট্রিং হয় তবে "_id", অবজেক্ট আইডি হলে কনভার্ট করা লাগতে পারে
+                  as: "recipeDetails",
+                },
+              },
+              {
+                $unwind: {
+                  path: "$recipeDetails",
+                  preserveNullAndEmptyArrays: true,
+                },
+              },
+            ])
+            .toArray();
+
+          res.status(200).json(reports);
+        } catch (error) {
+          res.status(500).json({ success: false, message: "Server Error" });
         }
       },
-      { $unwind: { path: "$recipeDetails", preserveNullAndEmptyArrays: true } }
-    ]).toArray();
-
-    res.status(200).json(reports);
-  } catch (error) {
-    res.status(500).json({ success: false, message: "Server Error" });
-  }
-});
-
-// 🗑️ ২. Dismiss Report API (শুধু রিপোর্ট ডিলিট হবে, রেসিপি থাকবে)
-app.delete("/api/admin/reports/:reportId/dismiss", async (req, res) => {
-  try {
-    const { reportId } = req.params;
-    
-    const query = ObjectId.isValid(reportId) ? { _id: new ObjectId(reportId) } : { _id: reportId };
-    const result = await reportsCollection.deleteOne(query);
-
-    if (result.deletedCount === 0) {
-      return res.status(404).json({ success: false, message: "Report not found" });
-    }
-
-    res.status(200).json({ success: true, message: "Report dismissed successfully!" });
-  } catch (error) {
-    res.status(500).json({ success: false, message: "Server Error" });
-  }
-});
-
-// 🚫 ৩. Delete Recipe & Reports API 
-app.delete("/api/admin/recipes/:recipeId", async (req, res) => {
-  try {
-    const { recipeId } = req.params;
-
-   
-    const recipeQuery = ObjectId.isValid(recipeId) ? { _id: new ObjectId(recipeId) } : { _id: recipeId };
-    await db.collection("recipes").deleteOne(recipeQuery);
-
-  
-    await reportsCollection.deleteMany({ recipeId: recipeId });
-
-    res.status(200).json({ success: true, message: "Recipe and associated reports deleted!" });
-  } catch (error) {
-    res.status(500).json({ success: false, message: "Server Error" });
-  }
-});
-
-    // user api API
-app.get("/api/users", async (req, res) => {
-  try {
-    const users = await db.collection("user").find({}).toArray(); // 👈 এখানে "user" দিন
-    res.status(200).json(users);
-  } catch (error) {
-    console.error("Fetch Users Error:", error);
-    res.status(500).json({ success: false, message: "Internal Server Error" });
-  }
-});
-
-// block/unblock api
-app.patch("/api/users/:id/block", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { isBlocked } = req.body;
-
-    // ১. ইউজার আইডি ফরম্যাট চেক (String অথবা ObjectId দুইটাই হ্যান্ডেল করবে)
-    let userQuery = { _id: id };
-    if (ObjectId.isValid(id)) {
-      userQuery = { 
-        $or: [
-          { _id: id }, 
-          { _id: new ObjectId(id) }
-        ] 
-      };
-    }
-
-    // ২. 'user' কালেকশনে ইউজারের ব্লক স্ট্যাটাস আপডেট করুন
-    const userResult = await db.collection("user").updateOne(
-      userQuery, 
-      { $set: { isBlocked: Boolean(isBlocked) } }
     );
 
-    if (userResult.matchedCount === 0) {
-      return res.status(404).json({ success: false, message: "User not found!" });
-    }
+    // . Dismiss Report API (শুধু রিপোর্ট ডিলিট হবে, রেসিপি থাকবে)
+    app.delete(
+      "/api/admin/reports/:reportId/dismiss",
+      logger,
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { reportId } = req.params;
 
-    // 🛑 ৩. ইউজারকে ব্লক করা হলে, সরাসরি Better Auth-এর 'session' কালেকশন থেকে তার সেশন ডিলিট করুন
-    if (isBlocked === true || isBlocked === "true") {
-      const sessionResult = await db.collection("session").deleteMany({
-        userId: id // Better Auth ডাটাবেজে userId-টিকে স্ট্রিং আকারে রাখে
-      });
-      
-      console.log(`Force Logout Successful! Deleted ${sessionResult.deletedCount} active sessions.`);
-    }
+          const query = ObjectId.isValid(reportId)
+            ? { _id: new ObjectId(reportId) }
+            : { _id: reportId };
+          const result = await reportsCollection.deleteOne(query);
 
-    res.status(200).json({ 
-      success: true, 
-      message: isBlocked ? "User blocked & kicked out successfully! 🚫" : "User unblocked successfully! ✅" 
-    });
+          if (result.deletedCount === 0) {
+            return res
+              .status(404)
+              .json({ success: false, message: "Report not found" });
+          }
 
-  } catch (error) {
-    console.error("Express Block Error:", error);
-    res.status(500).json({ success: false, message: "Internal Server Error" });
-  }
-});
+          res
+            .status(200)
+            .json({ success: true, message: "Report dismissed successfully!" });
+        } catch (error) {
+          res.status(500).json({ success: false, message: "Server Error" });
+        }
+      },
+    );
+
+    //  Delete Recipe & Reports API
+    app.delete(
+      "/api/admin/recipes/:recipeId",
+      logger,
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { recipeId } = req.params;
+
+          const recipeQuery = ObjectId.isValid(recipeId)
+            ? { _id: new ObjectId(recipeId) }
+            : { _id: recipeId };
+          await db.collection("recipes").deleteOne(recipeQuery);
+
+          await reportsCollection.deleteMany({ recipeId: recipeId });
+
+          res.status(200).json({
+            success: true,
+            message: "Recipe and associated reports deleted!",
+          });
+        } catch (error) {
+          res.status(500).json({ success: false, message: "Server Error" });
+        }
+      },
+    );
+
+    // user api API
+    app.get(
+      "/api/users",
+      logger,
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const users = await db.collection("user").find({}).toArray(); // 👈 এখানে "user" দিন
+          res.status(200).json(users);
+        } catch (error) {
+          console.error("Fetch Users Error:", error);
+          res
+            .status(500)
+            .json({ success: false, message: "Internal Server Error" });
+        }
+      },
+    );
+
+    // block/unblock api
+    app.patch(
+      "/api/users/:id/block",
+      logger,
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const { isBlocked } = req.body;
+
+          //ইউজার আইডি ফরম্যাট চেক (String অথবা ObjectId দুইটাই হ্যান্ডেল করবে)
+          let userQuery = { _id: id };
+          if (ObjectId.isValid(id)) {
+            userQuery = {
+              $or: [{ _id: id }, { _id: new ObjectId(id) }],
+            };
+          }
+
+          //  কালেকশনে ইউজারের ব্লক স্ট্যাটাস আপডেট করুন
+          const userResult = await db
+            .collection("user")
+            .updateOne(userQuery, { $set: { isBlocked: Boolean(isBlocked) } });
+
+          if (userResult.matchedCount === 0) {
+            return res
+              .status(404)
+              .json({ success: false, message: "User not found!" });
+          }
+
+          //  ইউজারকে ব্লক করা হলে, সরাসরি Better Auth-এর 'session' কালেকশন থেকে তার সেশন ডিলিট করুন
+          if (isBlocked === true || isBlocked === "true") {
+            const sessionResult = await db.collection("session").deleteMany({
+              userId: id, // Better Auth ডাটাবেজে userId-টিকে স্ট্রিং আকারে রাখে
+            });
+
+            console.log(
+              `Force Logout Successful! Deleted ${sessionResult.deletedCount} active sessions.`,
+            );
+          }
+
+          res.status(200).json({
+            success: true,
+            message: isBlocked
+              ? "User blocked & kicked out successfully! 🚫"
+              : "User unblocked successfully! ✅",
+          });
+        } catch (error) {
+          console.error("Express Block Error:", error);
+          res
+            .status(500)
+            .json({ success: false, message: "Internal Server Error" });
+        }
+      },
+    );
 
     // admin api for recipes manage
 
-app.patch("/api/recipes/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { isFeatured } = req.body;
+    app.patch(
+      "/api/recipes/:id",
+      logger,
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const { isFeatured } = req.body;
 
-    console.log("Received ID:", id); // ডিবাগিং এর জন্য লগ
-    console.log("Received Status:", isFeatured); // ডিবাগিং এর জন্য লগ
+          console.log("Received ID:", id); // ডিবাগিং এর জন্য লগ
+          console.log("Received Status:", isFeatured); // ডিবাগিং এর জন্য লগ
 
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid ID Format" });
-    }
+          if (!ObjectId.isValid(id)) {
+            return res
+              .status(400)
+              .json({ success: false, message: "Invalid ID Format" });
+          }
 
-    const result = await db.collection("recipes").updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { isFeatured: Boolean(isFeatured) } }
+          const result = await db
+            .collection("recipes")
+            .updateOne(
+              { _id: new ObjectId(id) },
+              { $set: { isFeatured: Boolean(isFeatured) } },
+            );
+
+          if (result.matchedCount === 0) {
+            return res
+              .status(404)
+              .json({ success: false, message: "Recipe not found!" });
+          }
+
+          res
+            .status(200)
+            .json({ success: true, message: "Updated in DB successfully!" });
+        } catch (error) {
+          console.error("PATCH Error:", error);
+          res
+            .status(500)
+            .json({ success: false, message: "Internal Server Error" });
+        }
+      },
     );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ success: false, message: "Recipe not found!" });
-    }
-
-    res.status(200).json({ success: true, message: "Updated in DB successfully!" });
-  } catch (error) {
-    console.error("PATCH Error:", error);
-    res.status(500).json({ success: false, message: "Internal Server Error" });
-  }
-});
-// upore sob admin api
+    // upore sob admin api
     // user favorites API
 
-    app.get("/api/users/:userId/favorites", async (req, res) => {
-      try {
-        const { userId } = req.params;
+    app.get(
+      "/api/users/:userId/favorites",
+      logger,
+      verifyToken,
+      async (req, res) => {
+        try {
+          const { userId } = req.params;
+          if (!req.user || req.user._id.toString() !== userId) {
+            return res.status(403).send({
+              Message: "Forbidden: You cannot view another user's favorites",
+            });
+          }
+          const userFavorites = await favoritesCollection
+            .find({ userId })
+            .toArray();
 
-        const userFavorites = await favoritesCollection
-          .find({ userId })
-          .toArray();
+          if (!userFavorites.length) {
+            return res.send([]);
+          }
 
-        if (!userFavorites.length) {
-          return res.send([]);
+          const recipeIds = userFavorites.map(
+            (fav) => new ObjectId(fav.recipeId),
+          );
+
+          const favoriteRecipes = await recipesCollection
+            .find({
+              _id: { $in: recipeIds },
+            })
+            .toArray();
+
+          res.send(favoriteRecipes);
+        } catch (error) {
+          console.error("Favorites Error:", error);
+          res.status(500).send({ error: error.message });
         }
-
-        const recipeIds = userFavorites.map(
-          (fav) => new ObjectId(fav.recipeId),
-        );
-
-        const favoriteRecipes = await recipesCollection
-          .find({
-            _id: { $in: recipeIds },
-          })
-          .toArray();
-
-        res.send(favoriteRecipes);
-      } catch (error) {
-        console.error("Favorites Error:", error);
-        res.status(500).send({ error: error.message });
-      }
-    });
+      },
+    );
 
     // user puschases API
 
-    app.get("/api/users/:userId/purchases", async (req, res) => {
-      try {
-        const { userId } = req.params;
+    app.get(
+      "/api/users/:userId/purchases",
+      logger,
+      verifyToken,
+      async (req, res) => {
+        try {
+          const { userId } = req.params;
+          if (!req.user || req.user._id.toString() !== userId) {
+            return res.status(403).send({
+              Message: "Forbidden: You cannot view another user's favorites",
+            });
+          }
+          const userPurchases = await purchasesCollection
+            .find({ userId })
+            .toArray();
 
-        const userPurchases = await purchasesCollection
-          .find({ userId })
-          .toArray();
+          if (!userPurchases.length) {
+            return res.send([]);
+          }
 
-        if (!userPurchases.length) {
-          return res.send([]);
+          const recipeIds = userPurchases.map(
+            (purchase) => new ObjectId(purchase.recipeId),
+          );
+
+          const purchasedRecipes = await recipesCollection
+            .find({
+              _id: { $in: recipeIds },
+            })
+            .toArray();
+
+          res.send(purchasedRecipes);
+        } catch (error) {
+          console.error("Purchases Error:", error);
+          res.status(500).send({ error: error.message });
         }
-
-        const recipeIds = userPurchases.map(
-          (purchase) => new ObjectId(purchase.recipeId),
-        );
-
-        const purchasedRecipes = await recipesCollection
-          .find({
-            _id: { $in: recipeIds },
-          })
-          .toArray();
-
-        res.send(purchasedRecipes);
-      } catch (error) {
-        console.error("Purchases Error:", error);
-        res.status(500).send({ error: error.message });
-      }
-    });
+      },
+    );
     // Like toggle
-    app.post("/api/recipes/:id/like", async (req, res) => {
+    app.post("/api/recipes/:id/like", logger, verifyToken, async (req, res) => {
       const { userId } = req.body;
       const recipeId = req.params.id;
+
+      if (!req.user || req.user._id.toString() !== userId) {
+        return res.status(403).send({
+          Message: "Forbidden: You cannot view another user's favorites",
+        });
+      }
 
       const existing = await likesCollection.findOne({ recipeId, userId });
       if (existing) {
@@ -291,56 +437,90 @@ app.patch("/api/recipes/:id", async (req, res) => {
     });
 
     // Favorite toggle
-    app.post("/api/recipes/:id/favorite", async (req, res) => {
-      const { userId } = req.body;
-      const recipeId = req.params.id;
-
-      const existing = await favoritesCollection.findOne({ recipeId, userId });
-      if (existing) {
-        await favoritesCollection.deleteOne({ recipeId, userId });
-        return res.send({ favorited: false });
-      }
-      await favoritesCollection.insertOne({
-        recipeId,
-        userId,
-        createdAt: new Date(),
-      });
-      res.send({ favorited: true });
-    });
+    app.post(
+      "/api/recipes/:id/favorite",
+      logger,
+      verifyToken,
+      async (req, res) => {
+        const { userId } = req.body;
+        const recipeId = req.params.id;
+        if (!req.user || req.user._id.toString() !== userId) {
+          return res.status(403).send({
+            Message: "Forbidden: You cannot view another user's favorites",
+          });
+        }
+        const existing = await favoritesCollection.findOne({
+          recipeId,
+          userId,
+        });
+        if (existing) {
+          await favoritesCollection.deleteOne({ recipeId, userId });
+          return res.send({ favorited: false });
+        }
+        await favoritesCollection.insertOne({
+          recipeId,
+          userId,
+          createdAt: new Date(),
+        });
+        res.send({ favorited: true });
+      },
+    );
 
     // Report
-    app.post("/api/recipes/:id/report", async (req, res) => {
-      const { userId, reason, details } = req.body;
-      const recipeId = req.params.id;
+    app.post(
+      "/api/recipes/:id/report",
+      logger,
+      verifyToken,
+      async (req, res) => {
+        const { userId, reason, details } = req.body;
+        const recipeId = req.params.id;
+        if (!req.user || req.user._id.toString() !== userId) {
+          return res.status(403).send({
+            Message: "Forbidden: You cannot view another user's favorites",
+          });
+        }
+        const existing = await reportsCollection.findOne({ recipeId, userId });
+        if (existing)
+          return res.status(400).send({ error: "Already reported" });
 
-      const existing = await reportsCollection.findOne({ recipeId, userId });
-      if (existing) return res.status(400).send({ error: "Already reported" });
-
-      await reportsCollection.insertOne({
-        recipeId,
-        userId,
-        reason,
-        details,
-        createdAt: new Date(),
-      });
-      res.send({ reported: true });
-    });
+        await reportsCollection.insertOne({
+          recipeId,
+          userId,
+          reason,
+          details,
+          createdAt: new Date(),
+        });
+        res.send({ reported: true });
+      },
+    );
 
     // Check user interactions (like/favorite status)
-    app.get("/api/browse-recipes/:id/interactions", async (req, res) => {
-      const { userId } = req.query;
-      const recipeId = req.params.id;
+    app.get(
+      "/api/browse-recipes/:id/interactions",
+      logger,
+      verifyToken,
+      async (req, res) => {
+        const { userId } = req.query;
+        const recipeId = req.params.id;
+        if (!req.user || req.user._id.toString() !== userId) {
+          return res.status(403).send({
+            Message: "Forbidden: You cannot view another user's favorites",
+          });
+        }
+        const liked = await likesCollection.findOne({ recipeId, userId });
+        const favorited = await favoritesCollection.findOne({
+          recipeId,
+          userId,
+        });
+        const reported = await reportsCollection.findOne({ recipeId, userId });
 
-      const liked = await likesCollection.findOne({ recipeId, userId });
-      const favorited = await favoritesCollection.findOne({ recipeId, userId });
-      const reported = await reportsCollection.findOne({ recipeId, userId });
-
-      res.send({
-        liked: !!liked,
-        favorited: !!favorited,
-        reported: !!reported,
-      });
-    });
+        res.send({
+          liked: !!liked,
+          favorited: !!favorited,
+          reported: !!reported,
+        });
+      },
+    );
 
     // Purchases Collection Route
     app.post("/api/purchases", async (req, res) => {
@@ -414,7 +594,7 @@ app.patch("/api/recipes/:id", async (req, res) => {
     // Plan ROUTES
     // ========================================================================
 
-    app.get("/api/plans", async (req, res) => {
+    app.get("/api/plans", logger, verifyToken, async (req, res) => {
       try {
         const { plan_id } = req.query;
 
@@ -469,7 +649,7 @@ app.patch("/api/recipes/:id", async (req, res) => {
     });
 
     // ── POST /api/recipes — add a new recipe ──────────────────────────────
-    app.post("/api/recipes", async (req, res) => {
+    app.post("/api/recipes", logger, verifyToken, async (req, res) => {
       const recipe = req.body;
 
       const newRecipe = {
@@ -478,7 +658,6 @@ app.patch("/api/recipes/:id", async (req, res) => {
       };
       const result = await recipesCollection.insertOne(newRecipe);
 
-     
       if (result.insertedId) {
         res
           .status(201)
@@ -492,67 +671,71 @@ app.patch("/api/recipes/:id", async (req, res) => {
 
     // update
 
-    app.patch("/api/recipes/update/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const updatedData = req.body;
+    app.patch(
+      "/api/recipes/update/:id",
 
-    const result = await recipesCollection.updateOne(
-      { _id: new ObjectId(id) },
-      {
-        $set: {
-          ...updatedData,
-          updatedAt: new Date(),
-        },
-      }
+      async (req, res) => {
+        try {
+          const id = req.params.id;
+          const updatedData = req.body;
+
+          const result = await recipesCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+              $set: {
+                ...updatedData,
+                updatedAt: new Date(),
+              },
+            },
+          );
+
+          if (result.matchedCount === 0) {
+            return res.status(404).send({
+              success: false,
+              message: "Recipe not found",
+            });
+          }
+
+          res.send({
+            success: true,
+            message: "Recipe updated successfully",
+            modifiedCount: result.modifiedCount,
+          });
+        } catch (error) {
+          res.status(500).send({
+            success: false,
+            error: error.message,
+          });
+        }
+      },
     );
+    // delate
+    app.delete("/api/recipes/delete/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
 
-    if (result.matchedCount === 0) {
-      return res.status(404).send({
-        success: false,
-        message: "Recipe not found",
-      });
-    }
+        const result = await recipesCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
 
-    res.send({
-      success: true,
-      message: "Recipe updated successfully",
-      modifiedCount: result.modifiedCount,
-    });
-  } catch (error) {
-    res.status(500).send({
-      success: false,
-      error: error.message,
-    });
-  }
-});
-// delate
-app.delete("/api/recipes/delete/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
+        if (result.deletedCount === 0) {
+          return res.status(404).send({
+            success: false,
+            message: "Recipe not found",
+          });
+        }
 
-    const result = await recipesCollection.deleteOne({
-      _id: new ObjectId(id),
+        res.send({
+          success: true,
+          message: "Recipe deleted successfully",
+        });
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          error: error.message,
+        });
+      }
     });
-
-    if (result.deletedCount === 0) {
-      return res.status(404).send({
-        success: false,
-        message: "Recipe not found",
-      });
-    }
-
-    res.send({
-      success: true,
-      message: "Recipe deleted successfully",
-    });
-  } catch (error) {
-    res.status(500).send({
-      success: false,
-      error: error.message,
-    });
-  }
-});
 
     // ========================================================================
     // HEALTH CHECK
