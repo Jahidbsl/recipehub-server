@@ -113,6 +113,63 @@ async function startServer() {
       next();
     };
 
+
+    // ========================================================================
+    // ALL TRANSACTIONS API (Admin Panel-এর জন্য Unified System)
+    // ========================================================================
+    app.get(
+      "/api/admin/transactions",
+      logger,
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          // ১. Purchases কালেকশন থেকে ডাটা তুলে আনা (Single Recipes - $4.99)
+          const singlePurchases = await purchasesCollection.find({}).toArray();
+          const mappedPurchases = singlePurchases.map((p) => ({
+            transactionId: p._id?.toString(), // MongoDB direct core document Object ID
+            user: p.email || p.userId || "Unknown User",
+            amount: p.amount ? Number(p.amount) : 4.99, // Static standard safe pricing setup
+            date: p.createdAt || new Date(),
+            status: "Success", // Purchase logged mane payment complete 
+            type: "Recipe Buy 🍳"
+          }));
+
+          // ২. Subscriptions কালেকশন থেকে ডাটা তুলে আনা (Yearly Plans)
+          const subscriptions = await subscriptionCollection.find({}).toArray();
+          const mappedSubs = subscriptions.map((s) => {
+            // Amount handle korar jonno dynamic system checks
+            let subAmount = 0;
+            if (s.amount) {
+              subAmount = Number(s.amount);
+            } else {
+              // Database-e explicit schema price record na thakle conditional matching check
+              subAmount = s.planId === "yearly" || s.planId?.toLowerCase().includes("year") ? 49.99 : 19.99;
+            }
+
+            return {
+              transactionId: s.stripeSubscriptionId || s._id?.toString(), // Stripe processing key track
+              user: s.email || "Premium Member",
+              amount: subAmount,
+              date: s.createdAt || new Date(),
+              status: s.status || "Active", // Stripe active parameter sync mapping
+              type: `Subscription (${s.planId || "Yearly"}) 💎`
+            };
+          });
+
+          // ৩. দুইটা ভিন্ন কালেকশনের ডেটা একসাথে মার্জ করা (Merged Array Queue)
+          const allTransactions = [...mappedPurchases, ...mappedSubs];
+
+          // ৪. ডেট অনুযায়ী লেটেস্ট ট্রানজেকশনগুলো সবার উপরে রাখা (Newest First)
+          allTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+          res.status(200).json({ success: true, data: allTransactions });
+        } catch (error) {
+          console.error("Fetch Transactions Admin Error:", error);
+          res.status(500).json({ success: false, message: "Server Error fetching transactions" });
+        }
+      }
+    );
     // . সব রিপোর্ট একসাথে দেখার API (Admin Panel-এর জন্য)
     app.get(
       "/api/admin/reports",
