@@ -282,60 +282,74 @@ async function startServer() {
     );
 
     // block/unblock api
-    app.patch(
-      "/api/users/:id/block",
-      logger,
-      verifyToken,
-      verifyAdmin,
-      async (req, res) => {
-        try {
-          const { id } = req.params;
-          const { isBlocked } = req.body;
+   app.patch(
+  "/api/users/:id/block",
+  logger,
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { isBlocked } = req.body;
 
-          //ইউজার আইডি ফরম্যাট চেক (String অথবা ObjectId দুইটাই হ্যান্ডেল করবে)
-          let userQuery = { _id: id };
-          if (ObjectId.isValid(id)) {
-            userQuery = {
-              $or: [{ _id: id }, { _id: new ObjectId(id) }],
-            };
-          }
+      if (!id) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Missing User ID parameter" });
+      }
 
-          //  কালেকশনে ইউজারের ব্লক স্ট্যাটাস আপডেট করুন
-          const userResult = await db
-            .collection("user")
-            .updateOne(userQuery, { $set: { isBlocked: Boolean(isBlocked) } });
+      // Build a strict query using standard $or wrapper arrays
+      let userQuery = {};
+      if (ObjectId.isValid(id)) {
+        userQuery = {
+          $or: [
+            { _id: id },
+            { _id: new ObjectId(id) }
+          ]
+        };
+      } else {
+        userQuery = { _id: id };
+      }
 
-          if (userResult.matchedCount === 0) {
-            return res
-              .status(404)
-              .json({ success: false, message: "User not found!" });
-          }
+      // Execute update on target collection
+      const userResult = await db
+        .collection("user")
+        .updateOne(userQuery, { $set: { isBlocked: Boolean(isBlocked) } });
 
-          //  ইউজারকে ব্লক করা হলে, সরাসরি Better Auth-এর 'session' কালেকশন থেকে তার সেশন ডিলিট করুন
-          if (isBlocked === true || isBlocked === "true") {
-            const sessionResult = await db.collection("session").deleteMany({
-              userId: id, // Better Auth ডাটাবেজে userId-টিকে স্ট্রিং আকারে রাখে
-            });
+      if (userResult.matchedCount === 0) {
+        return res
+          .status(404)
+          .json({ success: false, message: "User not found in database!" });
+      }
 
-            console.log(
-              `Force Logout Successful! Deleted ${sessionResult.deletedCount} active sessions.`,
-            );
-          }
+      if (isBlocked === true || isBlocked === "true") {
+        // Clear out sessions. Better Auth links sessions via userId matching the original user document string key.
+        const sessionResult = await db.collection("session").deleteMany({
+          $or: [
+            { userId: id },
+            { userId: ObjectId.isValid(id) ? new ObjectId(id) : id }
+          ]
+        });
 
-          res.status(200).json({
-            success: true,
-            message: isBlocked
-              ? "User blocked & kicked out successfully! 🚫"
-              : "User unblocked successfully! ✅",
-          });
-        } catch (error) {
-          console.error("Express Block Error:", error);
-          res
-            .status(500)
-            .json({ success: false, message: "Internal Server Error" });
-        }
-      },
-    );
+        console.log(
+          `Force Logout Successful! Deleted ${sessionResult.deletedCount} active sessions.`
+        );
+      }
+
+      res.status(200).json({
+        success: true,
+        message: isBlocked
+          ? "User blocked & kicked out successfully! 🚫"
+          : "User unblocked successfully! ✅",
+      });
+    } catch (error) {
+      console.error("Express Block Error:", error);
+      res
+        .status(500)
+        .json({ success: false, message: "Internal Server Error" });
+    }
+  },
+);
 
     // admin api for recipes manage
 
