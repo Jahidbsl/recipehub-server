@@ -188,13 +188,13 @@ app.get(
   verifyAdmin,
   async (req, res) => {
     try {
-      // কোনো এগ্রিগেশন বা জয়েন ছাড়া সরাসরি কালেকশনের সব ডাটা তুলে আনা হচ্ছে
+      // গ্লোবাল ভ্যারিয়েবল ব্যবহার না করে সরাসরি রিকোয়েস্টের সময় কালেকশন কল করুন
       const reports = await db.collection("reports").find({}).toArray();
       
-      console.log("Raw Reports from DB:", reports); // আপনার ব্যাকএন্ড কনসোলে ডাটা প্রিন্ট হবে
+      console.log("Realtime Data Check:", reports);
       res.status(200).json(reports);
     } catch (error) {
-      console.error("Fetch Raw Reports Error:", error);
+      console.error("Route level error:", error);
       res.status(500).json({ success: false, message: "Server Error" });
     }
   },
