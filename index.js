@@ -1,5 +1,11 @@
 const express = require("express");
 const cors = require("cors");
+app.use(cors({
+  origin: 'https://recipehub-roan-sigma.vercel.app', 
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 require("dotenv").config();
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
