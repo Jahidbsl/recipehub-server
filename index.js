@@ -11,12 +11,14 @@ const port = process.env.PORT || 5000;
 // =======================
 // Middleware
 // =======================
-app.use(cors({
-  origin: 'https://recipehub-roan-sigma.vercel.app', 
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+app.use(
+  cors({
+    origin: "https://recipehub-roan-sigma.vercel.app",
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -113,7 +115,6 @@ async function startServer() {
       next();
     };
 
-
     // ========================================================================
     // ALL TRANSACTIONS API (Admin Panel-এর জন্য Unified System)
     // ========================================================================
@@ -131,8 +132,8 @@ async function startServer() {
             user: p.email || p.userId || "Unknown User",
             amount: p.amount ? Number(p.amount) : 4.99, // Static standard safe pricing setup
             date: p.createdAt || new Date(),
-            status: "Success", // Purchase logged mane payment complete 
-            type: "Recipe Buy 🍳"
+            status: "Success", // Purchase logged mane payment complete
+            type: "Recipe Buy 🍳",
           }));
 
           // ২. Subscriptions কালেকশন থেকে ডাটা তুলে আনা (Yearly Plans)
@@ -144,7 +145,11 @@ async function startServer() {
               subAmount = Number(s.amount);
             } else {
               // Database-e explicit schema price record na thakle conditional matching check
-              subAmount = s.planId === "yearly" || s.planId?.toLowerCase().includes("year") ? 49.99 : 19.99;
+              subAmount =
+                s.planId === "yearly" ||
+                s.planId?.toLowerCase().includes("year")
+                  ? 49.99
+                  : 19.99;
             }
 
             return {
@@ -153,7 +158,7 @@ async function startServer() {
               amount: subAmount,
               date: s.createdAt || new Date(),
               status: s.status || "Active", // Stripe active parameter sync mapping
-              type: `Subscription (${s.planId || "Yearly"}) 💎`
+              type: `Subscription (${s.planId || "Yearly"}) 💎`,
             };
           });
 
@@ -166,9 +171,14 @@ async function startServer() {
           res.status(200).json({ success: true, data: allTransactions });
         } catch (error) {
           console.error("Fetch Transactions Admin Error:", error);
-          res.status(500).json({ success: false, message: "Server Error fetching transactions" });
+          res
+            .status(500)
+            .json({
+              success: false,
+              message: "Server Error fetching transactions",
+            });
         }
-      }
+      },
     );
     // . সব রিপোর্ট একসাথে দেখার API (Admin Panel-এর জন্য)
     app.get(
@@ -178,14 +188,36 @@ async function startServer() {
       verifyAdmin,
       async (req, res) => {
         try {
-          // এখানে আমরা রিপোর্টগুলোর সাথে রেসিপির নাম/ডিলেট অপশনের জন্য 'recipes' কালেকশনের সাথে lookup (join) করছি
           const reports = await reportsCollection
             .aggregate([
               {
+                $addFields: {
+                  convertedRecipeId: {
+                    $convert: {
+                      input: "$recipeId",
+                      to: "objectId",
+                      onError: "$recipeId",
+                      onNull: "$recipeId",
+                    },
+                  },
+                },
+              },
+              {
                 $lookup: {
-                  from: "recipes", // আপনার রেসিপি কালেকশনের নাম 'recipes' হলে এটি রাখুন
-                  localField: "recipeId",
-                  foreignField: "_id", // রেসিপি আইডি যদি স্ট্রিং হয় তবে "_id", অবজেক্ট আইডি হলে কনভার্ট করা লাগতে পারে
+                  from: "recipes",
+                  let: { rId: "$recipeId", convId: "$convertedRecipeId" },
+                  pipeline: [
+                    {
+                      $match: {
+                        $expr: {
+                          $or: [
+                            { $eq: ["$_id", "$$rId"] },
+                            { $eq: ["$_id", "$$convId"] },
+                          ],
+                        },
+                      },
+                    },
+                  ],
                   as: "recipeDetails",
                 },
               },
@@ -200,6 +232,7 @@ async function startServer() {
 
           res.status(200).json(reports);
         } catch (error) {
+          console.error("Fetch Reports Error:", error);
           res.status(500).json({ success: false, message: "Server Error" });
         }
       },
@@ -282,74 +315,71 @@ async function startServer() {
     );
 
     // block/unblock api
-   app.patch(
-  "/api/users/:id/block",
-  logger,
-  verifyToken,
-  verifyAdmin,
-  async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { isBlocked } = req.body;
+    app.patch(
+      "/api/users/:id/block",
+      logger,
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const { isBlocked } = req.body;
 
-      if (!id) {
-        return res
-          .status(400)
-          .json({ success: false, message: "Missing User ID parameter" });
-      }
+          if (!id) {
+            return res
+              .status(400)
+              .json({ success: false, message: "Missing User ID parameter" });
+          }
 
-      // Build a strict query using standard $or wrapper arrays
-      let userQuery = {};
-      if (ObjectId.isValid(id)) {
-        userQuery = {
-          $or: [
-            { _id: id },
-            { _id: new ObjectId(id) }
-          ]
-        };
-      } else {
-        userQuery = { _id: id };
-      }
+          // Build a strict query using standard $or wrapper arrays
+          let userQuery = {};
+          if (ObjectId.isValid(id)) {
+            userQuery = {
+              $or: [{ _id: id }, { _id: new ObjectId(id) }],
+            };
+          } else {
+            userQuery = { _id: id };
+          }
 
-      // Execute update on target collection
-      const userResult = await db
-        .collection("user")
-        .updateOne(userQuery, { $set: { isBlocked: Boolean(isBlocked) } });
+          // Execute update on target collection
+          const userResult = await db
+            .collection("user")
+            .updateOne(userQuery, { $set: { isBlocked: Boolean(isBlocked) } });
 
-      if (userResult.matchedCount === 0) {
-        return res
-          .status(404)
-          .json({ success: false, message: "User not found in database!" });
-      }
+          if (userResult.matchedCount === 0) {
+            return res
+              .status(404)
+              .json({ success: false, message: "User not found in database!" });
+          }
 
-      if (isBlocked === true || isBlocked === "true") {
-        // Clear out sessions. Better Auth links sessions via userId matching the original user document string key.
-        const sessionResult = await db.collection("session").deleteMany({
-          $or: [
-            { userId: id },
-            { userId: ObjectId.isValid(id) ? new ObjectId(id) : id }
-          ]
-        });
+          if (isBlocked === true || isBlocked === "true") {
+            // Clear out sessions. Better Auth links sessions via userId matching the original user document string key.
+            const sessionResult = await db.collection("session").deleteMany({
+              $or: [
+                { userId: id },
+                { userId: ObjectId.isValid(id) ? new ObjectId(id) : id },
+              ],
+            });
 
-        console.log(
-          `Force Logout Successful! Deleted ${sessionResult.deletedCount} active sessions.`
-        );
-      }
+            console.log(
+              `Force Logout Successful! Deleted ${sessionResult.deletedCount} active sessions.`,
+            );
+          }
 
-      res.status(200).json({
-        success: true,
-        message: isBlocked
-          ? "User blocked & kicked out successfully! 🚫"
-          : "User unblocked successfully! ✅",
-      });
-    } catch (error) {
-      console.error("Express Block Error:", error);
-      res
-        .status(500)
-        .json({ success: false, message: "Internal Server Error" });
-    }
-  },
-);
+          res.status(200).json({
+            success: true,
+            message: isBlocked
+              ? "User blocked & kicked out successfully! 🚫"
+              : "User unblocked successfully! ✅",
+          });
+        } catch (error) {
+          console.error("Express Block Error:", error);
+          res
+            .status(500)
+            .json({ success: false, message: "Internal Server Error" });
+        }
+      },
+    );
 
     // admin api for recipes manage
 
