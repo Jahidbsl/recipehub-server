@@ -182,115 +182,129 @@ async function startServer() {
       },
     );
     // . সব রিপোর্ট একসাথে দেখার API (Admin Panel-এর জন্য)
-    app.get(
-      "/api/admin/reports",
-      logger,
-      verifyToken,
-      verifyAdmin,
-      async (req, res) => {
-        try {
-          const reports = await db.collection("reports").find({}).toArray();
+// ১. Get All Reports API
+app.get(
+  "/api/admin/reports",
+  logger,
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
+    try {
+      const reports = await db.collection("reports").find({}).toArray();
 
-          if (!reports || reports.length === 0) {
-            return res.status(200).json([]);
+      if (!reports || reports.length === 0) {
+        return res.status(200).json([]);
+      }
+
+      const reportsWithDetails = await Promise.all(
+        reports.map(async (report) => {
+          let recipeDetails = null;
+
+          try {
+            const targetId = ObjectId.isValid(report.recipeId)
+              ? new ObjectId(report.recipeId)
+              : report.recipeId;
+
+            recipeDetails = await db
+              .collection("recipes")
+              .findOne({ _id: targetId });
+          } catch (err) {
+            recipeDetails = null;
           }
 
-          const reportsWithDetails = await Promise.all(
-            reports.map(async (report) => {
-              let recipeDetails = null;
+          return {
+            ...report,
+            recipeDetails: recipeDetails || {
+              name: "Unknown or Deleted Recipe",
+            },
+          };
+        }),
+      );
 
-              try {
-                // ১. আইডি অবজেক্ট আইডি তে কনভার্ট করার চেষ্টা করুন
-                const targetId = ObjectId.isValid(report.recipeId)
-                  ? new ObjectId(report.recipeId)
-                  : report.recipeId;
+      res.status(200).json(reportsWithDetails);
+    } catch (error) {
+      console.error("Fetch Reports Error:", error);
+      res.status(500).json({ success: false, message: "Server Error" });
+    }
+  },
+);
 
-                recipeDetails = await db
-                  .collection("recipes")
-                  .findOne({ _id: targetId });
-              } catch (err) {
-                recipeDetails = null;
-              }
+// ২. Dismiss Report API (ফিক্সড)
+// শুধু একটি নির্দিষ্ট রিপোর্ট ডিলিট হবে (রিপোর্ট আইডি দিয়ে)
+app.delete(
+  "/api/admin/reports/:reportId/dismiss",
+  logger,
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
+    try {
+      const { reportId } = req.params;
 
-              return {
-                ...report,
-                // রেসিপির টাইটেল বা নাম যেটা আপনার স্কিমাতে আছে (ধরা যাক title বা name)
-                recipeDetails: recipeDetails || {
-                  name: "Unknown or Deleted Recipe",
-                },
-              };
-            }),
-          );
+      // আইডি অবজেক্ট আইডি কি না চেক করা
+      const reportQuery = ObjectId.isValid(reportId)
+        ? { _id: new ObjectId(reportId) }
+        : { _id: reportId };
 
-          res.status(200).json(reportsWithDetails);
-        } catch (error) {
-          console.error("Fetch Reports Error:", error);
-          res.status(500).json({ success: false, message: "Server Error" });
-        }
-      },
-    );
-    // . Dismiss Report API (শুধু রিপোর্ট ডিলিট হবে, রেসিপি থাকবে)
-    app.delete(
-      "/api/admin/reports/:reportId/dismiss",
-      logger,
-      verifyToken,
-      verifyAdmin,
-      async (req, res) => {
-        try {
-          const { reportId } = req.params;
+      // db.collection("reports") ব্যবহার করা হয়েছে সামঞ্জস্য রাখার জন্য
+      const result = await db.collection("reports").deleteOne(reportQuery);
 
-          const reportQuery = ObjectId.isValid(recipeId)
-            ? {
-                $or: [
-                  { recipeId: recipeId },
-                  { recipeId: new ObjectId(recipeId) },
-                ],
-              }
-            : { recipeId: recipeId };
+      if (result.deletedCount === 0) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Report not found" });
+      }
 
-          await reportsCollection.deleteMany(reportQuery);
+      res.status(200).json({ 
+        success: true, 
+        message: "Report dismissed successfully!" 
+      });
+    } catch (error) {
+      console.error("Dismiss Report Error:", error);
+      res.status(500).json({ success: false, message: "Server Error" });
+    }
+  },
+);
 
-          if (result.deletedCount === 0) {
-            return res
-              .status(404)
-              .json({ success: false, message: "Report not found" });
+// ৩. Delete Recipe & Reports API (ফিক্সড)
+// রেসিপি ডিলিট হবে এবং ওই রেসিপির যত রিপোর্ট আছে সব ডিলিট হবে
+app.delete(
+  "/api/admin/recipes/:recipeId",
+  logger,
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
+    try {
+      const { recipeId } = req.params;
+
+      // রেসিপি ডিলিট করার কোয়েরি
+      const recipeQuery = ObjectId.isValid(recipeId)
+        ? { _id: new ObjectId(recipeId) }
+        : { _id: recipeId };
+        
+      const recipeResult = await db.collection("recipes").deleteOne(recipeQuery);
+
+      // রিপোর্টের ভেতর recipeId স্ট্রিং বা অবজেক্ট আইডি যেকোনো ফর্মে থাকতে পারে, তাই ২টিই চেক করা হলো
+      const reportQuery = ObjectId.isValid(recipeId)
+        ? {
+            $or: [
+              { recipeId: recipeId },
+              { recipeId: new ObjectId(recipeId) },
+            ],
           }
+        : { recipeId: recipeId };
 
-          res
-            .status(200)
-            .json({ success: true, message: "Report dismissed successfully!" });
-        } catch (error) {
-          res.status(500).json({ success: false, message: "Server Error" });
-        }
-      },
-    );
+      await db.collection("reports").deleteMany(reportQuery);
 
-    //  Delete Recipe & Reports API
-    app.delete(
-      "/api/admin/recipes/:recipeId",
-      logger,
-      verifyToken,
-      verifyAdmin,
-      async (req, res) => {
-        try {
-          const { recipeId } = req.params;
-
-          const recipeQuery = ObjectId.isValid(recipeId)
-            ? { _id: new ObjectId(recipeId) }
-            : { _id: recipeId };
-          await db.collection("recipes").deleteOne(recipeQuery);
-
-          await reportsCollection.deleteMany({ recipeId: recipeId });
-
-          res.status(200).json({
-            success: true,
-            message: "Recipe and associated reports deleted!",
-          });
-        } catch (error) {
-          res.status(500).json({ success: false, message: "Server Error" });
-        }
-      },
-    );
+      res.status(200).json({
+        success: true,
+        message: "Recipe and associated reports deleted successfully!",
+      });
+    } catch (error) {
+      console.error("Delete Recipe Error:", error);
+      res.status(500).json({ success: false, message: "Server Error" });
+    }
+  },
+);
 
     // user api API
     app.get(
